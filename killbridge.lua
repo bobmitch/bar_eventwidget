@@ -158,6 +158,7 @@ function widget:UnitFinished(unitID, unitDefID, unitTeam)
         unitID        = unitID,
         unitTeam      = unitTeam,
         unitTier      = tier,
+        unitDefID     = unitDefID or -1,
         unitCategory  = ud.modCategories, -- json.lua handles this table automatically
         unitMetalCost = ud and ud.metalCost or 0
     })
