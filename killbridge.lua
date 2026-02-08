@@ -3,6 +3,11 @@ local socket = socket
 Json = Json or VFS.Include('common/luaUtilities/json.lua')
 local json_util = Json
 
+local overflowFramesMetal = 0
+local overflowFramesEnergy = 0
+local lastMetalOverflow = false
+local lastEnergyOverflow = false
+
 function widget:GetInfo()
     return {
         name    = "KillBridgeTCP",
@@ -269,15 +274,48 @@ end
 
 
 function widget:GameFrame(frame)
+    -- get vars used in multiple places
+    local teamID = Spring.GetMyTeamID()
+    -- m
+    local m_inc, m_use, m_stor, m_pull, m_share, m_sent, m_rec, m_excs = Spring.GetTeamResourceStats(teamID, "metal")
+    -- e
+    local e_inc, e_use, e_stor, e_pull, e_share, e_sent, e_rec, e_excs = Spring.GetTeamResourceStats(teamID, "energy")
+
+    -- Check Metal Status
+    local isMetalOverflowing = (m_excs > 0)
+    if isMetalOverflowing then
+        overflowFramesMetal = 0
+        if not lastMetalOverflow then
+            SendData({event="OverflowStatusChanged", resource="metal", status="1"})
+            lastMetalOverflow = true
+        end
+    else
+        overflowFramesMetal = overflowFramesMetal + 1
+        if lastMetalOverflow then
+            SendData({event="OverflowStatusChanged", resource="metal", status="0"})
+            lastMetalOverflow = false
+        end
+    end
+
+    -- Check Energy Status
+    local isEnergyOverflowing = (e_excs > 0)
+    if isEnergyOverflowing then
+        overflowFramesEnergy = 0
+        if not lastEnergyOverflow then
+            SendData({event="OverflowStatusChanged", resource="energy", status="1"})
+            lastEnergyOverflow = true
+        end
+    else
+        overflowFramesEnergy = overflowFramesEnergy + 1
+        if lastEnergyOverflow then
+            SendData({event="OverflowStatusChanged", resource="energy", status="0"})
+            lastEnergyOverflow = false
+        end
+    end
+
+    -- Full Stats Update: Send a comprehensive stats update every 10 seconds (300 frames at 30 FPS)
     -- every 10 seconds worth of gameframes
     if frame % 300 == 0 then
-        local teamID = Spring.GetMyTeamID()
-
-        -- m
-        local m_inc, m_use, m_stor, m_pull, m_share, m_sent, m_rec, m_excs = Spring.GetTeamResourceStats(teamID, "metal")
-        
-        -- e
-        local e_inc, e_use, e_stor, e_pull, e_share, e_sent, e_rec, e_excs = Spring.GetTeamResourceStats(teamID, "energy")
 
         -- combat
         local dmg_dealt, dmg_rec = 0, 0
