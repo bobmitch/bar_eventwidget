@@ -324,6 +324,33 @@ function widget:GameFrame(frame)
                 }
             })
         end
+
+        -- get ally stats too
+
+        local myAllyTeamID = Spring.GetMyAllyTeamID()
+        local teamList = Spring.GetTeamList(myAllyTeamID)
+        local allTeamStats = {}
+
+        for i=1, #teamList do
+            local teamID = teamList[i]
+            local m_inc, m_use, m_stor, m_pull, m_share, m_sent, m_rec, m_excs = Spring.GetTeamResourceStats(teamID, "metal")
+            local e_inc, e_use, e_stor, e_pull, e_share, e_sent, e_rec, e_excs = Spring.GetTeamResourceStats(teamID, "energy")
+            
+            -- Get the name for the JS side
+            local name = GetPlayerNameFromTeam(teamID)
+
+            allTeamStats[teamID] = {
+                playerName = name,
+                metal = { income = m_inc, usage = m_use, storage = m_stor, pull = m_pull, sent = m_sent },
+                energy = { income = e_inc, usage = e_use, storage = e_stor, pull = e_pull, sent = e_sent }
+            }
+        end
+
+        SendData({
+            event = "AllyStatsUpdate",
+            frame = frame,
+            teams = allTeamStats
+        })
     end
 end
 
