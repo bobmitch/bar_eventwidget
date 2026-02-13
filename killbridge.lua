@@ -175,19 +175,12 @@ function widget:UnitDamaged(unitID, unitDefID, unitTeam, damage, paralyzer, weap
     if unitDefID then
         -- since we can only track damage TAKEN by any LOS unit, we limit to just our units
         if unitTeam ~= myTeamID then return end
-        -- attacker team always nil
+        -- attacker team always nil, only send data needed for damage to our units, and we can get the attacker info later when/if the unit dies
         SendData({
             event           = "UnitDamaged",
             unitID          = unitID or -1,
             unitDefID       = unitDefID or -1,
-            unitTeam        = unitTeam or -1,
-            damage          = damage or 0,
-            paralyzer       = paralyzer or 0,
-            weaponDefID     = weaponDefID or -1,
-            projectileID    = projectileID or -1,
-            attackerID      = attackerID or -1,
-            attackerDefID   = attackerDefID or -1,
-            attackerTeam    = attackerTeam or -1
+            damage          = damage or 0
         })
     end
 end
@@ -282,7 +275,7 @@ function widget:GameFrame(frame)
     local e_inc, e_use, e_stor, e_pull, e_share, e_sent, e_rec, e_excs = Spring.GetTeamResourceStats(teamID, "energy")
 
     -- Check Metal Status
-    local isMetalOverflowing = (m_excs > 0)
+    local isMetalOverflowing = (m_excs or 0 > 0)
     if isMetalOverflowing then
         overflowFramesMetal = 0
         if not lastMetalOverflow then
@@ -298,7 +291,7 @@ function widget:GameFrame(frame)
     end
 
     -- Check Energy Status
-    local isEnergyOverflowing = (e_excs > 0)
+    local isEnergyOverflowing = (e_excs or 0 > 0)
     if isEnergyOverflowing then
         overflowFramesEnergy = 0
         if not lastEnergyOverflow then
