@@ -22,6 +22,19 @@ local lastConnAttempt = 0
 local RECONNECT_INTERVAL = 5 
 local lastUpdateFrame = -1
 
+-- Forward declaration of SendData so Connect can use it
+local SendData 
+
+--- NEW: Function to dump all unit definitions ---
+local function SendAllUnitDefs()
+    if not client then return end
+    Spring.Echo("KillBridge: Sending all UnitDefs...")
+    SendData({
+        event = "allUnits",
+        unitDefs = UnitDefs -- This sends the entire table
+    })
+end
+
 local function Connect()
     if not socket then return false end
     if client then client:close() end
@@ -30,8 +43,12 @@ local function Connect()
     client:settimeout(0)
     
     local success, err = client:connect("127.0.0.1", 5005)
+    -- "timeout" is expected for non-blocking connect; it means it's connecting in the background
+    -- or already established.
     if success or err == "already connected" or err == "timeout" then
         Spring.Echo("KillBridge: Connected")
+        -- Trigger the data dump upon successful connection
+        SendAllUnitDefs()
         return true
     end
     client = nil
@@ -48,7 +65,8 @@ function widget:Update(dt)
     end
 end
 
-local function SendData(dataTable)
+-- We define this as a local variable so it can be called by Connect()
+SendData = function(dataTable)
     if not client then return end
 
     local myPlayerID = Spring.GetMyPlayerID()
@@ -63,7 +81,6 @@ local function SendData(dataTable)
     dataTable['gameTime'] = Spring.GetGameSeconds()
 
     -- Use the utility to encode the entire table
-    -- We add the newline manually for the TCP receiver to know the message ended
     local status, jsonString = pcall(json_util.encode, dataTable)
     
     if not status then
@@ -78,6 +95,22 @@ local function SendData(dataTable)
         client = nil
     end
 end
+
+function widget:Initialize()
+    -- Attempt initial connection
+    if Connect() then
+        -- Send initial status after the allUnits dump (which is called inside Connect)
+        if Spring.GetGameFrame() > 0 then
+            SendData({event="WidgetInitializedMidGame"})
+        else
+            SendData({event="WidgetInitializedPreGame"})
+        end
+    end
+end
+
+-- ... [Remaining functions: GameStart, GetUnitName, GetPlayerNameFromTeam, UnitFinished, UnitDamaged, UnitDestroyed, GameFrame, Shutdown remain unchanged] ...
+
+-- Ensure the rest of your original script follows here --
 
 function widget:Initialize()
     -- Attempt initial connection
