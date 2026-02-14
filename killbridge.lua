@@ -294,23 +294,15 @@ function widget:UnitDestroyed(unitID, unitDefID, unitTeam, attackerID, attackerD
         attackerAllyTeamID  = attackerAllyTeamID,
         
         unitID             = unitID,
-        unitDefID          = unitDefID,
-        unitName           = ud and ud.name or "Unknown",
-        unitMetalCost      = ud and ud.metalCost or 0,
-        unitCategory       = ud and ud.modCategories or {},
-        unitTier           = ud and ud.customParams and ud.customParams.techlevel or "1",
+        unitDefID          = unitDefID
         
         unitTeam           = unitTeam,
         victimPlayer       = victimPlayerName,
         
         attackerID         = actualAttackerID or -1,
         attackerDefID      = actualAttackerDefID or -1,
-        attackerName       = aud and aud.name or "Explosion/Nature/Unknown",
         attackerTeam       = actualAttackerTeam or -1,
-        attackerPlayer     = attackerPlayerName,
-        attackerMetalCost   = aud and aud.metalCost or 0,
-        attackerCategory    = aud and aud.modCategories or {},
-        attackerTier        = aud and aud.customParams and aud.customParams.techlevel or "1",
+        attackerPlayer     = attackerPlayerName
 
         attackerCumulativeDamage = attackerTotalDamage
     })
