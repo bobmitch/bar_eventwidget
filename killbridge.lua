@@ -22,19 +22,6 @@ local lastConnAttempt = 0
 local RECONNECT_INTERVAL = 5 
 local lastUpdateFrame = -1
 
--- Forward declaration of SendData so Connect can use it
-local SendData 
-
---- NEW: Function to dump all unit definitions ---
-local function SendAllUnitDefs()
-    if not client then return end
-    Spring.Echo("KillBridge: Sending all UnitDefs...")
-    SendData({
-        event = "allUnits",
-        unitDefs = UnitDefs -- This sends the entire table
-    })
-end
-
 local function Connect()
     if not socket then return false end
     if client then client:close() end
@@ -43,12 +30,8 @@ local function Connect()
     client:settimeout(0)
     
     local success, err = client:connect("127.0.0.1", 5005)
-    -- "timeout" is expected for non-blocking connect; it means it's connecting in the background
-    -- or already established.
     if success or err == "already connected" or err == "timeout" then
         Spring.Echo("KillBridge: Connected")
-        -- Trigger the data dump upon successful connection
-        SendAllUnitDefs()
         return true
     end
     client = nil
@@ -65,8 +48,7 @@ function widget:Update(dt)
     end
 end
 
--- We define this as a local variable so it can be called by Connect()
-SendData = function(dataTable)
+local function SendData(dataTable)
     if not client then return end
 
     local myPlayerID = Spring.GetMyPlayerID()
@@ -81,6 +63,7 @@ SendData = function(dataTable)
     dataTable['gameTime'] = Spring.GetGameSeconds()
 
     -- Use the utility to encode the entire table
+    -- We add the newline manually for the TCP receiver to know the message ended
     local status, jsonString = pcall(json_util.encode, dataTable)
     
     if not status then
@@ -96,25 +79,60 @@ SendData = function(dataTable)
     end
 end
 
-function widget:Initialize()
-    -- Attempt initial connection
-    if Connect() then
-        -- Send initial status after the allUnits dump (which is called inside Connect)
-        if Spring.GetGameFrame() > 0 then
-            SendData({event="WidgetInitializedMidGame"})
-        else
-            SendData({event="WidgetInitializedPreGame"})
+local function SendFilteredUnitDefs()
+    Spring.Echo("KillBridge: Preparing to send filtered UnitDefs...")
+    if not client then return end
+    
+    local filteredDefs = {}
+    
+    Spring.Echo("KillBridge: Compiling filtered UnitDefs...")
+
+    for id, ud in pairs(UnitDefs) do
+        -- Ensure we are looking at a valid unit definition table
+        if type(ud) == "table" then
+            filteredDefs[tostring(id)] = {
+                id                 = id,
+                name               = ud.name,
+                canFight           = ud.canFight,
+                canCloak           = ud.canCloak,
+                canFly             = ud.canFly,
+                canSubmerge        = ud.canSubmerge,
+                metalCost          = ud.metalCost,
+                energyCost         = ud.energyCost,
+                health             = ud.health,
+                isAirUnit          = ud.isAirUnit,
+                isBomber           = ud.isBomber,
+                isBuilder          = ud.isBuilder,
+                isBuilding         = ud.isBuilding,
+                isExtractor        = ud.isExtractor,
+                isFactory          = ud.isFactory,
+                isFeature          = ud.isFeature,
+                isFighterAirUnit   = ud.isFighterAirUnit,
+                isFirePlatform     = ud.isFirePlatform,
+                isGroundUnit       = ud.isGroundUnit,
+                isHoveringAirUnit  = ud.isHoveringAirUnit,
+                isImmobile         = ud.isImmobile,
+                isMobileBuilder    = ud.isMobileBuilder,
+                isStaticBuilder    = ud.isStaticBuilder,
+                isStrafingAirUnit  = ud.isStrafingAirUnit,
+                isTransport        = ud.isTransport,
+                techLevel          = (ud.customParams and ud.customParams.techlevel) or "1"
+            }
         end
     end
+
+    SendData({
+        event = "allUnits",
+        unitDefs = filteredDefs
+    })
+    
+    Spring.Echo("KillBridge: Filtered UnitDefs sent.")
 end
-
--- ... [Remaining functions: GameStart, GetUnitName, GetPlayerNameFromTeam, UnitFinished, UnitDamaged, UnitDestroyed, GameFrame, Shutdown remain unchanged] ...
-
--- Ensure the rest of your original script follows here --
 
 function widget:Initialize()
     -- Attempt initial connection
     Connect()
+    SendFilteredUnitDefs()
     if Spring.GetGameFrame() > 0 then
         -- widget started late or toggled on mid-game
         SendData({event="WidgetInitializedMidGame"})
