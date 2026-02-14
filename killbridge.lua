@@ -21,6 +21,7 @@ local client = nil
 local lastConnAttempt = 0
 local RECONNECT_INTERVAL = 5 
 local lastUpdateFrame = -1
+local unitDefsSent = false
 
 local function Connect()
     if not socket then return false end
@@ -122,7 +123,7 @@ local function SendFilteredUnitDefs()
     end
 
     SendData({
-        event = "allUnits",
+        event = "AllUnits",
         unitDefs = filteredDefs
     })
     
@@ -132,17 +133,82 @@ end
 function widget:Initialize()
     -- Attempt initial connection
     Connect()
-    SendFilteredUnitDefs()
     if Spring.GetGameFrame() > 0 then
         -- widget started late or toggled on mid-game
         SendData({event="WidgetInitializedMidGame"})
     else
+        -- set timeout to 2 seconds for possible large packets
+        client:settimeout(2)
+
         SendData({event="WidgetInitializedPreGame"})
+        -- safe to send all unit defs now since we haven't started the game yet
+        -- JS has cached version of this, but nice to have 'live'
+        SendFilteredUnitDefs()
+
+        -- set timeout back to non-blocking for regular updates
+        client:settimeout(0)
     end
 end
 
 function widget:GameStart()
     SendData({event="GameStart"})
+end
+
+function widget:GamePaused(playerID, isPaused)
+    local playerName = Spring.GetPlayerInfo(playerID) or "Unknown"
+    
+    if isPaused then
+        SendData({event = "GamePaused", player = playerName})
+    else
+        SendData({event = "GameResumed", player = playerName})
+    end
+end
+
+function widget:GameOver(winningAllyTeams)
+    local myAllyTeamID = Spring.GetMyAllyTeamID()
+    local iAmWinner = false
+
+    -- winningAllyTeams is a table of IDs
+    for _, allyID in ipairs(winningAllyTeams) do
+        if allyID == myAllyTeamID then
+            iAmWinner = true
+            break
+        end
+    end
+
+    SendData({
+        event = "GameOver",
+        victory = iAmWinner,
+        winningTeams = winningAllyTeams
+    })
+end
+
+function widget:GameOver(winningAllyTeams)
+    if gameEnded then return end
+    gameEnded = true
+
+    local teamID = Spring.GetMyTeamID()
+    
+    -- Get history (returns a table of stats for every minute of the game)
+    -- stats includes: metalUsed, metalProduced, energyUsed, energyProduced, etc.
+    local history = Spring.GetTeamStatsHistory(teamID)
+
+    SendData({
+        event = "GameOver",
+        victory = isWinner,
+        duration = Spring.GetGameSeconds(),
+        history = history
+    })
+end
+
+
+function widget:Shutdown()
+    -- send a final goodbye so the Go relay knows we didn't just crash
+    if client then
+        SendData({event = "SocketClosing", reason = "Widget Shutdown"})
+        client:close()
+        client = nil
+    end
 end
 
 local function GetUnitName(uDefID)
@@ -294,7 +360,7 @@ function widget:UnitDestroyed(unitID, unitDefID, unitTeam, attackerID, attackerD
         attackerAllyTeamID  = attackerAllyTeamID,
         
         unitID             = unitID,
-        unitDefID          = unitDefID
+        unitDefID          = unitDefID,
         
         unitTeam           = unitTeam,
         victimPlayer       = victimPlayerName,
@@ -302,7 +368,7 @@ function widget:UnitDestroyed(unitID, unitDefID, unitTeam, attackerID, attackerD
         attackerID         = actualAttackerID or -1,
         attackerDefID      = actualAttackerDefID or -1,
         attackerTeam       = actualAttackerTeam or -1,
-        attackerPlayer     = attackerPlayerName
+        attackerPlayer     = attackerPlayerName,
 
         attackerCumulativeDamage = attackerTotalDamage
     })
