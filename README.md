@@ -2,6 +2,8 @@
 
 A Lua widget for **Beyond All Reason** that creates a TCP network bridge to stream real-time game events and statistics to external applications.
 
+[Discussion](https://discord.gg/NK7QWfVE9M)
+
 ## Overview
 
 KillBridgeTCP enables communication between a Beyond All Reason game client and external applications via TCP sockets. It captures in-game events (unit kills, damage, construction) and team statistics (resource management, combat metrics) and sends them as JSON over a TCP connection.
