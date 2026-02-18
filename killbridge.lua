@@ -9,6 +9,7 @@ local lastMetalOverflow = false
 local lastEnergyOverflow = false
 
 local THRESHOLD_METAL_COST = 3000
+local seenUnitTypes = {} -- Tracks unitDefIDs already reported
 
 function widget:GetInfo()
     return {
@@ -153,6 +154,7 @@ function widget:Initialize()
 end
 
 function widget:GameStart()
+    seenUnitTypes = {}
     SendData({event="GameStart"})
 end
 
@@ -194,17 +196,23 @@ end
 
 function widget:UnitEnteredLos(unitID, allyTeam)
     local unitDefID = Spring.GetUnitDefID(unitID)
-    if not unitDefID then return end
+    if not unitDefID or seenUnitTypes[unitDefID] then 
+        return -- Exit if unknown or already "discovered" this game
+    end
 
     local ud = UnitDefs[unitDefID]
     
     -- Filter by Metal Cost
     if ud and ud.metalCost >= THRESHOLD_METAL_COST then
+        -- Mark as seen immediately to avoid race conditions or double-processing
+        seenUnitTypes[unitDefID] = true
+        
         local unitTeam = Spring.GetUnitTeam(unitID)
         local tier = ud.customParams and ud.customParams.techlevel or "1"
         
         SendData({
             event         = "UnitEnteredLos",
+            subEvent      = "FirstDetection", -- Helpful for your relay app logic
             unitID        = unitID,
             unitDefID     = unitDefID,
             unitName      = ud.name,
@@ -213,6 +221,8 @@ function widget:UnitEnteredLos(unitID, allyTeam)
             unitMetalCost = ud.metalCost,
             ownerName     = GetPlayerNameFromTeam(unitTeam)
         })
+        
+        Spring.Echo("KillBridge: First " .. ud.name .. " detected! Alerting relay.")
     end
 end
 
