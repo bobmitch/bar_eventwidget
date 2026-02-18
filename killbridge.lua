@@ -8,6 +8,8 @@ local overflowFramesEnergy = 0
 local lastMetalOverflow = false
 local lastEnergyOverflow = false
 
+local THRESHOLD_METAL_COST = 3000
+
 function widget:GetInfo()
     return {
         name    = "KillBridgeTCP",
@@ -164,11 +166,13 @@ function widget:GamePaused(playerID, isPaused)
     end
 end
 
+local gameEnded = false
 function widget:GameOver(winningAllyTeams)
+    if gameEnded then return end
+    gameEnded = true
+
     local myAllyTeamID = Spring.GetMyAllyTeamID()
     local iAmWinner = false
-
-    -- winningAllyTeams is a table of IDs
     for _, allyID in ipairs(winningAllyTeams) do
         if allyID == myAllyTeamID then
             iAmWinner = true
@@ -176,29 +180,40 @@ function widget:GameOver(winningAllyTeams)
         end
     end
 
-    SendData({
-        event = "GameOver",
-        victory = iAmWinner,
-        winningTeams = winningAllyTeams
-    })
-end
-
-function widget:GameOver(winningAllyTeams)
-    if gameEnded then return end
-    gameEnded = true
-
     local teamID = Spring.GetMyTeamID()
-    
-    -- Get history (returns a table of stats for every minute of the game)
-    -- stats includes: metalUsed, metalProduced, energyUsed, energyProduced, etc.
     local history = Spring.GetTeamStatsHistory(teamID)
 
     SendData({
         event = "GameOver",
-        victory = isWinner,
+        victory = iAmWinner,
         duration = Spring.GetGameSeconds(),
+        winningTeams = winningAllyTeams,
         history = history
     })
+end
+
+function widget:UnitEnteredLos(unitID, allyTeam)
+    local unitDefID = Spring.GetUnitDefID(unitID)
+    if not unitDefID then return end
+
+    local ud = UnitDefs[unitDefID]
+    
+    -- Filter by Metal Cost
+    if ud and ud.metalCost >= THRESHOLD_METAL_COST then
+        local unitTeam = Spring.GetUnitTeam(unitID)
+        local tier = ud.customParams and ud.customParams.techlevel or "1"
+        
+        SendData({
+            event         = "UnitEnteredLos",
+            unitID        = unitID,
+            unitDefID     = unitDefID,
+            unitName      = ud.name,
+            unitTeam      = unitTeam,
+            unitTier      = tier,
+            unitMetalCost = ud.metalCost,
+            ownerName     = GetPlayerNameFromTeam(unitTeam)
+        })
+    end
 end
 
 
