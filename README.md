@@ -1,3 +1,12 @@
+## 🛠 Related Repositories
+This project is part of a suite of tools. You can find the related components below:
+
+| Repository | Purpose |
+| :--- | :--- |
+| [**bar**](https://github.com/bobmitch/bar) | Core application logic and main service. |
+| [**bar_relay**](https://github.com/bobmitch/bar_relay) | JSON layer/proxy for passing game events to the internet. |
+| [**bar_eventwidget**](https://github.com/bobmitch/bar_eventwidget) | LUA -> JSON conversion and local transmission. |
+
 # KillBridgeTCP Widget
 
 A Lua widget for **Beyond All Reason** that creates a TCP network bridge to stream real-time game events and statistics to external applications.
