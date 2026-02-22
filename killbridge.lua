@@ -377,7 +377,7 @@ function widget:UnitDestroyed(unitID, unitDefID, unitTeam, attackerID, attackerD
     end
 
     -- standard destruction
-   
+    -- new - send unitXP for triggers (pacifist, or maybe killing high value targets) 
     SendData({
         event               = "UnitDestroyed",
         myAllyTeamID        = myAllyTeamID,
@@ -386,6 +386,7 @@ function widget:UnitDestroyed(unitID, unitDefID, unitTeam, attackerID, attackerD
         
         unitID             = unitID,
         unitDefID          = unitDefID,
+        unitXP            = Spring.GetUnitExperience(unitID) or 0,
         
         unitTeam           = unitTeam,
         victimPlayer       = victimPlayerName,
