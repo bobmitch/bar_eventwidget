@@ -133,6 +133,64 @@ local function SendFilteredUnitDefs()
     Spring.Echo("KillBridge: Filtered UnitDefs sent.")
 end
 
+local function GetUnitName(uDefID)
+    -- might do this server-side instead
+    local ud = UnitDefs[uDefID]
+    if not ud then return "Unknown" end
+    return ud.name
+end
+
+local function GetPlayerNameFromTeam(teamID)
+    if teamID == nil then return "Unknown" end
+    if teamID == Spring.GetGaiaTeamID() then return "Environment/Gaia" end
+
+    -- leaderID is the PlayerID of the person controlling this team
+    local _, leaderID, _, isAI, side, allyTeamID = Spring.GetTeamInfo(teamID)
+
+    if isAI then
+        -- For AIs, we get their name from GetAIInfo
+        local _, name, _, shortName = Spring.GetAIInfo(teamID)
+        return name or shortName or "AI"
+    end
+
+    if leaderID then
+        local name = Spring.GetPlayerInfo(leaderID)
+        return name or "Unknown Player"
+    end
+
+    return "No Player"
+end
+
+local function SendAllyTeamColors()
+    local myAllyTeamID = Spring.GetMyAllyTeamID()
+    local teamList = Spring.GetTeamList(myAllyTeamID)
+    local colors = {}
+
+    for i = 1, #teamList do
+        local teamID = teamList[i]
+        local r, g, b = Spring.GetTeamColor(teamID)
+        if r and g and b then
+            colors[tostring(teamID)] = {
+                playerName = GetPlayerNameFromTeam(teamID),
+                r   = r,
+                g   = g,
+                b   = b,
+                hex = string.format("#%02x%02x%02x",
+                    math.floor(r * 255 + 0.5),
+                    math.floor(g * 255 + 0.5),
+                    math.floor(b * 255 + 0.5))
+            }
+        end
+    end
+
+    SendData({
+        event  = "AllyColorsUpdate",
+        colors = colors
+    })
+
+    Spring.Echo("KillBridge: AllyColorsUpdate sent for " .. #teamList .. " team(s).")
+end
+
 function widget:Initialize()
     -- Attempt initial connection
     Connect()
@@ -237,65 +295,6 @@ function widget:Shutdown()
         client = nil
     end
 end
-
-local function GetUnitName(uDefID)
-    -- might do this server-side instead
-    local ud = UnitDefs[uDefID]
-    if not ud then return "Unknown" end
-    return ud.name
-end
-
-local function GetPlayerNameFromTeam(teamID)
-    if teamID == nil then return "Unknown" end
-    if teamID == Spring.GetGaiaTeamID() then return "Environment/Gaia" end
-
-    -- leaderID is the PlayerID of the person controlling this team
-    local _, leaderID, _, isAI, side, allyTeamID = Spring.GetTeamInfo(teamID)
-
-    if isAI then
-        -- For AIs, we get their name from GetAIInfo
-        local _, name, _, shortName = Spring.GetAIInfo(teamID)
-        return name or shortName or "AI"
-    end
-
-    if leaderID then
-        local name = Spring.GetPlayerInfo(leaderID)
-        return name or "Unknown Player"
-    end
-
-    return "No Player"
-end
-
-local function SendAllyTeamColors()
-    local myAllyTeamID = Spring.GetMyAllyTeamID()
-    local teamList = Spring.GetTeamList(myAllyTeamID)
-    local colors = {}
-
-    for i = 1, #teamList do
-        local teamID = teamList[i]
-        local r, g, b = Spring.GetTeamColor(teamID)
-        if r and g and b then
-            colors[tostring(teamID)] = {
-                playerName = GetPlayerNameFromTeam(teamID),
-                r   = r,
-                g   = g,
-                b   = b,
-                hex = string.format("#%02x%02x%02x",
-                    math.floor(r * 255 + 0.5),
-                    math.floor(g * 255 + 0.5),
-                    math.floor(b * 255 + 0.5))
-            }
-        end
-    end
-
-    SendData({
-        event  = "AllyColorsUpdate",
-        colors = colors
-    })
-
-    Spring.Echo("KillBridge: AllyColorsUpdate sent for " .. #teamList .. " team(s).")
-end
-
 
 
 -- pre-relation change version
