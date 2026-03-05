@@ -139,6 +139,7 @@ function widget:Initialize()
     if Spring.GetGameFrame() > 0 then
         -- widget started late or toggled on mid-game
         SendData({event="WidgetInitializedMidGame"})
+        SendAllyTeamColors()   -- ← NEW
     else
         -- set timeout to 2 seconds for possible large packets
         client:settimeout(2)
@@ -156,6 +157,7 @@ end
 function widget:GameStart()
     seenUnitTypes = {}
     SendData({event="GameStart"})
+    SendAllyTeamColors()
 end
 
 function widget:GamePaused(playerID, isPaused)
@@ -262,6 +264,36 @@ local function GetPlayerNameFromTeam(teamID)
     end
 
     return "No Player"
+end
+
+local function SendAllyTeamColors()
+    local myAllyTeamID = Spring.GetMyAllyTeamID()
+    local teamList = Spring.GetTeamList(myAllyTeamID)
+    local colors = {}
+
+    for i = 1, #teamList do
+        local teamID = teamList[i]
+        local r, g, b = Spring.GetTeamColor(teamID)
+        if r and g and b then
+            colors[tostring(teamID)] = {
+                playerName = GetPlayerNameFromTeam(teamID),
+                r   = r,
+                g   = g,
+                b   = b,
+                hex = string.format("#%02x%02x%02x",
+                    math.floor(r * 255 + 0.5),
+                    math.floor(g * 255 + 0.5),
+                    math.floor(b * 255 + 0.5))
+            }
+        end
+    end
+
+    SendData({
+        event  = "AllyColorsUpdate",
+        colors = colors
+    })
+
+    Spring.Echo("KillBridge: AllyColorsUpdate sent for " .. #teamList .. " team(s).")
 end
 
 
