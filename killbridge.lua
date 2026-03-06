@@ -102,6 +102,7 @@ local function SendFilteredUnitDefs()
                 canFly             = ud.canFly,
                 canSubmerge        = ud.canSubmerge,
                 metalCost          = ud.metalCost,
+                buildSpeed         = ud.buildSpeed,
                 energyCost         = ud.energyCost,
                 health             = ud.health,
                 isAirUnit          = ud.isAirUnit,
@@ -339,6 +340,7 @@ function widget:UnitFinished(unitID, unitDefID, unitTeam)
         unitDefID     = unitDefID or -1,
         unitCategory  = ud.modCategories, -- json.lua handles this table automatically
         unitMetalCost = ud and ud.metalCost or 0
+        unitBuildSpeed = ud and ud.buildSpeed or 0
     })
 end
 
