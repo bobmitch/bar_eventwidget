@@ -339,7 +339,7 @@ function widget:UnitFinished(unitID, unitDefID, unitTeam)
         unitTier      = tier,
         unitDefID     = unitDefID or -1,
         unitCategory  = ud.modCategories, -- json.lua handles this table automatically
-        unitMetalCost = ud and ud.metalCost or 0
+        unitMetalCost = ud and ud.metalCost or 0,
         unitBuildSpeed = ud and ud.buildSpeed or 0
     })
 end
@@ -423,6 +423,9 @@ function widget:UnitDestroyed(unitID, unitDefID, unitTeam, attackerID, attackerD
         
         unitTeam           = unitTeam,
         victimPlayer       = victimPlayerName,
+
+        unitMetalCost      = destroyedUD and destroyedUD.metalCost or 0,
+        unitBuildSpeed     = destroyedUD and destroyedUD.buildSpeed or 0,
         
         attackerID         = actualAttackerID or -1,
         attackerDefID      = actualAttackerDefID or -1,
