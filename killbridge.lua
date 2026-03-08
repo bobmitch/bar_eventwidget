@@ -11,6 +11,14 @@ local lastEnergyOverflow = false
 local THRESHOLD_METAL_COST = 3000
 local seenUnitTypes = {} -- Tracks unitDefIDs already reported
 
+-- unitID → { bp = buildSpeed, defID = unitDefID } for every builder unit owned by myTeam.
+-- Maintained incrementally via UnitFinished / UnitDestroyed; used to compute builderEfficiency.
+local builderUnits = {}
+
+-- maxMetalUseCache[builderDefID][targetDefID] = maxMetal (metal/s at full build speed).
+-- Persists across ticks — a given builder+target combo never changes, so we compute once and cache.
+local maxMetalUseCache = {}
+
 function widget:GetInfo()
     return {
         name    = "KillBridgeTCP",
@@ -329,6 +337,11 @@ function widget:UnitFinished(unitID, unitDefID, unitTeam)
     end
 
     local ud = UnitDefs[unitDefID]
+
+    -- Track builder units owned by our team for efficiency calculation
+    if unitTeam == myTeamID and ud and ud.isBuilder then
+        builderUnits[unitID] = { bp = ud.buildSpeed or 0, defID = unitDefID }
+    end
     
     SendData({
         event         = "UnitFinished",
@@ -382,6 +395,11 @@ function widget:UnitDestroyed(unitID, unitDefID, unitTeam, attackerID, attackerD
     -- only care about units I own killing or being killed
     if (unitTeam ~= myTeamID and actualAttackerTeam ~= myTeamID) then return end
 
+    -- Remove from builderUnits tracking if one of our builders was destroyed
+    if unitTeam == myTeamID then
+        builderUnits[unitID] = nil
+    end
+
     -- 3. RESOLVE DATA: Handle names and cumulative damage
     local myAllyTeamID = Spring.GetTeamAllyTeamID(myTeamID)
     local unitAllyTeamID = Spring.GetTeamAllyTeamID(unitTeam)
@@ -404,7 +422,6 @@ function widget:UnitDestroyed(unitID, unitDefID, unitTeam, attackerID, attackerD
         ud = {name="Unknown", metalCost=0, modCategories={}}
     end
 
-    -- don't know what attacked?
     if not aud then 
         aud = nil
     end
@@ -490,19 +507,82 @@ function widget:GameFrame(frame)
         -- stats
         local u_killed, u_died, u_capBy, u_capFrom, u_rec, u_sent = Spring.GetTeamUnitStats(teamID)
 
+        -- Builder efficiency: per-unit ratio of actual metal draw vs theoretical max metal draw
+        -- for the unit currently being constructed, averaged across all active builders.
+        -- Mirrors the calculation in bar_native_charts (charts.lua) exactly.
+        -- Idle builders are excluded from both numerator and denominator.
+        -- If no builders are actively constructing, we report 100 (nothing to measure).
+        --
+        -- Per-builder max metal rate = (builderSpeed / targetBuildTime) * targetMetalCost
+        -- Cached by [builderDefID][targetDefID] since it depends only on unit definitions.
+        --
+        -- GetUnitResources(unitID, "metal") → currentLevel, pull, income, expense, share
+        -- We use pull (index 2) as the actual metal draw rate for the unit.
+        local effSum   = 0
+        local effCount = 0
+        local totalBP  = 0
+        for uid, builderData in pairs(builderUnits) do
+            local bp    = builderData.bp
+            local defID = builderData.defID
+            totalBP = totalBP + bp
+
+            local targetUnitID = Spring.GetUnitIsBuilding(uid)
+            if targetUnitID then
+                local targetDefID = Spring.GetUnitDefID(targetUnitID)
+
+                local maxMetal = nil
+                if defID and targetDefID then
+                    local row = maxMetalUseCache[defID]
+                    if row then
+                        maxMetal = row[targetDefID]
+                    end
+                    if maxMetal == nil then
+                        local bud = UnitDefs[defID]
+                        local tud = UnitDefs[targetDefID]
+                        if bud and tud then
+                            local bt = tud.buildTime or 1
+                            if bt <= 0 then bt = 1 end
+                            maxMetal = (bp / bt) * (tud.metalCost or 0)
+                        else
+                            maxMetal = 0
+                        end
+                        if not maxMetalUseCache[defID] then
+                            maxMetalUseCache[defID] = {}
+                        end
+                        maxMetalUseCache[defID][targetDefID] = maxMetal
+                    end
+                end
+
+                local _, mPull = Spring.GetUnitResources(uid, "metal")
+                local mUsing = mPull or 0
+
+                if maxMetal and maxMetal > 0 then
+                    local ratio = math.min(1.0, mUsing / maxMetal)
+                    effSum   = effSum   + ratio
+                    effCount = effCount + 1
+                end
+            end
+            -- Idle builders (targetUnitID == nil) are intentionally skipped
+        end
+        -- All idle or no builders → report 100 (nothing actively building to measure against)
+        local builderEfficiency = effCount > 0
+            and ((effSum / effCount) * 100)
+            or  (totalBP > 0 and 100 or 0)
+
         if SendData then
             SendData({
                 event = "FullStatsUpdate",
                 frame = frame,
                 metal = {
-                    income   = m_inc   or 0,
-                    usage    = m_use   or 0,
-                    storage  = m_stor  or 0,
-                    pull     = m_pull  or 0,
-                    share    = m_share or 0,
-                    sent     = m_sent  or 0,
-                    received = m_rec   or 0,
-                    excess   = m_excs  or 0
+                    income            = m_inc   or 0,
+                    usage             = m_use   or 0,
+                    storage           = m_stor  or 0,
+                    pull              = m_pull  or 0,
+                    share             = m_share or 0,
+                    sent              = m_sent  or 0,
+                    received          = m_rec   or 0,
+                    excess            = m_excs  or 0,
+                    builderEfficiency = builderEfficiency
                 },
                 energy = {
                     income   = e_inc   or 0,
