@@ -19,6 +19,22 @@ local builderUnits = {}
 -- Persists across ticks — a given builder+target combo never changes, so we compute once and cache.
 local maxMetalUseCache = {}
 
+-- ── Builder efficiency rolling average ────────────────────────────────────────
+-- We sample the instantaneous efficiency every EFFICIENCY_SAMPLE_INTERVAL frames
+-- and keep the last EFFICIENCY_WINDOW_SAMPLES samples in a circular buffer.
+-- At send time (every 300 frames) we average the buffer to get a smooth 10-second
+-- rolling mean, avoiding spikes caused by units whose build speed ramps up over time
+-- (e.g. units that gain build speed through experience or construction assist logic).
+--
+-- At 30 FPS:
+--   EFFICIENCY_SAMPLE_INTERVAL = 10  → sample every ~0.33 s
+--   EFFICIENCY_WINDOW_SAMPLES  = 30  → 30 samples × 0.33 s ≈ 10-second window
+local EFFICIENCY_SAMPLE_INTERVAL = 10
+local EFFICIENCY_WINDOW_SAMPLES  = 30  -- 10 s ÷ (10 frames / 30 FPS)
+local efficiencySamples          = {}  -- circular buffer of raw [0–100] values
+local efficiencySampleCount      = 0   -- number of valid entries currently in buffer
+local efficiencySampleIndex      = 0   -- next write position (0-based mod WINDOW_SAMPLES)
+
 function widget:GetInfo()
     return {
         name    = "KillBridgeTCP",
@@ -142,63 +158,120 @@ local function SendFilteredUnitDefs()
     Spring.Echo("KillBridge: Filtered UnitDefs sent.")
 end
 
-local function GetUnitName(uDefID)
-    -- might do this server-side instead
-    local ud = UnitDefs[uDefID]
-    if not ud then return "Unknown" end
-    return ud.name
-end
-
 local function GetPlayerNameFromTeam(teamID)
-    if teamID == nil then return "Unknown" end
-    if teamID == Spring.GetGaiaTeamID() then return "Environment/Gaia" end
-
-    -- leaderID is the PlayerID of the person controlling this team
-    local _, leaderID, _, isAI, side, allyTeamID = Spring.GetTeamInfo(teamID)
-
-    if isAI then
-        -- For AIs, we get their name from GetAIInfo
-        local _, name, _, shortName = Spring.GetAIInfo(teamID)
-        return name or shortName or "AI"
-    end
-
-    if leaderID then
-        local name = Spring.GetPlayerInfo(leaderID)
-        return name or "Unknown Player"
-    end
-
-    return "No Player"
+    if not teamID then return "Unknown" end
+    local playerList = Spring.GetTeamInfo(teamID)
+    if not playerList then return "Unknown" end
+    local playerID = select(2, Spring.GetTeamInfo(teamID))
+    if not playerID or playerID < 0 then return "AI/Unknown" end
+    local name = Spring.GetPlayerInfo(playerID)
+    return name or "Unknown"
 end
 
 local function SendAllyTeamColors()
     local myAllyTeamID = Spring.GetMyAllyTeamID()
-    local teamList = Spring.GetTeamList(myAllyTeamID)
-    local colors = {}
+    local teamList     = Spring.GetTeamList(myAllyTeamID)
+    local colors       = {}
 
-    for i = 1, #teamList do
-        local teamID = teamList[i]
-        local r, g, b = Spring.GetTeamColor(teamID)
-        if r and g and b then
-            colors[tostring(teamID)] = {
-                playerName = GetPlayerNameFromTeam(teamID),
-                r   = r,
-                g   = g,
-                b   = b,
-                hex = string.format("#%02x%02x%02x",
-                    math.floor(r * 255 + 0.5),
-                    math.floor(g * 255 + 0.5),
-                    math.floor(b * 255 + 0.5))
-            }
-        end
+    for _, tid in ipairs(teamList) do
+        local r, g, b, a = Spring.GetTeamColor(tid)
+        local pname      = GetPlayerNameFromTeam(tid)
+        colors[tid] = {
+            playerName = pname,
+            r = r, g = g, b = b, a = a
+        }
     end
 
-    SendData({
-        event  = "AllyColorsUpdate",
-        colors = colors
-    })
-
-    Spring.Echo("KillBridge: AllyColorsUpdate sent for " .. #teamList .. " team(s).")
+    SendData({ event = "AllyColorsUpdate", colors = colors })
 end
+
+-- ── Compute the instantaneous builder-efficiency sample ───────────────────────
+-- Returns a value in [0, 100]:
+--   100 = every active builder drawing metal at full theoretical rate
+--         (or no builders are actively constructing — nothing to penalise)
+--   <100 = eco-starved or partially-fed build queues
+-- Idle builders (GetUnitIsBuilding == nil) are excluded from both numerator
+-- and denominator, exactly as in bar_native_charts (charts.lua).
+local function SampleBuilderEfficiency()
+    local effSum   = 0
+    local effCount = 0
+    local totalBP  = 0
+
+    for uid, builderData in pairs(builderUnits) do
+        local bp    = builderData.bp
+        local defID = builderData.defID
+        totalBP = totalBP + bp
+
+        local targetUnitID = Spring.GetUnitIsBuilding(uid)
+        if targetUnitID then
+            local targetDefID = Spring.GetUnitDefID(targetUnitID)
+
+            local maxMetal = nil
+            if defID and targetDefID then
+                local row = maxMetalUseCache[defID]
+                if row then
+                    maxMetal = row[targetDefID]
+                end
+                if maxMetal == nil then
+                    local bud = UnitDefs[defID]
+                    local tud = UnitDefs[targetDefID]
+                    if bud and tud then
+                        local bt = tud.buildTime or 1
+                        if bt <= 0 then bt = 1 end
+                        maxMetal = (bp / bt) * (tud.metalCost or 0)
+                    else
+                        maxMetal = 0
+                    end
+                    if not maxMetalUseCache[defID] then
+                        maxMetalUseCache[defID] = {}
+                    end
+                    maxMetalUseCache[defID][targetDefID] = maxMetal
+                end
+            end
+
+            local _, mPull = Spring.GetUnitResources(uid, "metal")
+            local mUsing = mPull or 0
+
+            if maxMetal and maxMetal > 0 then
+                local ratio = math.min(1.0, mUsing / maxMetal)
+                effSum   = effSum   + ratio
+                effCount = effCount + 1
+            end
+        end
+        -- Idle builders (targetUnitID == nil) are intentionally skipped
+    end
+
+    -- All idle or no builders → report 100 (nothing actively building to measure against)
+    if effCount > 0 then
+        return (effSum / effCount) * 100
+    elseif totalBP > 0 then
+        return 100
+    else
+        return 0
+    end
+end
+
+-- ── Push one sample into the circular buffer ──────────────────────────────────
+local function RecordEfficiencySample(value)
+    -- Lua tables are 1-indexed; map 0-based index → 1-based slot
+    local slot = (efficiencySampleIndex % EFFICIENCY_WINDOW_SAMPLES) + 1
+    efficiencySamples[slot] = value
+    efficiencySampleIndex   = efficiencySampleIndex + 1
+    if efficiencySampleCount < EFFICIENCY_WINDOW_SAMPLES then
+        efficiencySampleCount = efficiencySampleCount + 1
+    end
+end
+
+-- ── Average all valid samples currently in the buffer ─────────────────────────
+local function GetRollingEfficiencyAverage()
+    if efficiencySampleCount == 0 then return 0 end
+    local sum = 0
+    for i = 1, efficiencySampleCount do
+        sum = sum + (efficiencySamples[i] or 0)
+    end
+    return sum / efficiencySampleCount
+end
+
 
 function widget:Initialize()
     -- Attempt initial connection
@@ -206,7 +279,7 @@ function widget:Initialize()
     if Spring.GetGameFrame() > 0 then
         -- widget started late or toggled on mid-game
         SendData({event="WidgetInitializedMidGame"})
-        SendAllyTeamColors()   -- ← NEW
+        SendAllyTeamColors()
     else
         -- set timeout to 2 seconds for possible large packets
         client:settimeout(2)
@@ -441,8 +514,8 @@ function widget:UnitDestroyed(unitID, unitDefID, unitTeam, attackerID, attackerD
         unitTeam           = unitTeam,
         victimPlayer       = victimPlayerName,
 
-        unitMetalCost      = destroyedUD and destroyedUD.metalCost or 0,
-        unitBuildSpeed     = destroyedUD and destroyedUD.buildSpeed or 0,
+        unitMetalCost      = ud and ud.metalCost or 0,
+        unitBuildSpeed     = ud and ud.buildSpeed or 0,
         
         attackerID         = actualAttackerID or -1,
         attackerDefID      = actualAttackerDefID or -1,
@@ -494,8 +567,16 @@ function widget:GameFrame(frame)
         end
     end
 
+    -- ── Builder efficiency: sample every EFFICIENCY_SAMPLE_INTERVAL frames ────
+    -- We sample here (cheaply) rather than only at the 300-frame send boundary so
+    -- that the rolling window covers the whole inter-send period, not just the
+    -- single instant the FullStatsUpdate fires.  At 30 FPS and a 10-frame
+    -- interval this gives ~30 samples spread evenly over the 10-second window.
+    if frame % EFFICIENCY_SAMPLE_INTERVAL == 0 then
+        RecordEfficiencySample(SampleBuilderEfficiency())
+    end
+
     -- Full Stats Update: Send a comprehensive stats update every 10 seconds (300 frames at 30 FPS)
-    -- every 10 seconds worth of gameframes
     if frame % 300 == 0 then
 
         -- combat
@@ -507,67 +588,10 @@ function widget:GameFrame(frame)
         -- stats
         local u_killed, u_died, u_capBy, u_capFrom, u_rec, u_sent = Spring.GetTeamUnitStats(teamID)
 
-        -- Builder efficiency: per-unit ratio of actual metal draw vs theoretical max metal draw
-        -- for the unit currently being constructed, averaged across all active builders.
-        -- Mirrors the calculation in bar_native_charts (charts.lua) exactly.
-        -- Idle builders are excluded from both numerator and denominator.
-        -- If no builders are actively constructing, we report 100 (nothing to measure).
-        --
-        -- Per-builder max metal rate = (builderSpeed / targetBuildTime) * targetMetalCost
-        -- Cached by [builderDefID][targetDefID] since it depends only on unit definitions.
-        --
-        -- GetUnitResources(unitID, "metal") → currentLevel, pull, income, expense, share
-        -- We use pull (index 2) as the actual metal draw rate for the unit.
-        local effSum   = 0
-        local effCount = 0
-        local totalBP  = 0
-        for uid, builderData in pairs(builderUnits) do
-            local bp    = builderData.bp
-            local defID = builderData.defID
-            totalBP = totalBP + bp
-
-            local targetUnitID = Spring.GetUnitIsBuilding(uid)
-            if targetUnitID then
-                local targetDefID = Spring.GetUnitDefID(targetUnitID)
-
-                local maxMetal = nil
-                if defID and targetDefID then
-                    local row = maxMetalUseCache[defID]
-                    if row then
-                        maxMetal = row[targetDefID]
-                    end
-                    if maxMetal == nil then
-                        local bud = UnitDefs[defID]
-                        local tud = UnitDefs[targetDefID]
-                        if bud and tud then
-                            local bt = tud.buildTime or 1
-                            if bt <= 0 then bt = 1 end
-                            maxMetal = (bp / bt) * (tud.metalCost or 0)
-                        else
-                            maxMetal = 0
-                        end
-                        if not maxMetalUseCache[defID] then
-                            maxMetalUseCache[defID] = {}
-                        end
-                        maxMetalUseCache[defID][targetDefID] = maxMetal
-                    end
-                end
-
-                local _, mPull = Spring.GetUnitResources(uid, "metal")
-                local mUsing = mPull or 0
-
-                if maxMetal and maxMetal > 0 then
-                    local ratio = math.min(1.0, mUsing / maxMetal)
-                    effSum   = effSum   + ratio
-                    effCount = effCount + 1
-                end
-            end
-            -- Idle builders (targetUnitID == nil) are intentionally skipped
-        end
-        -- All idle or no builders → report 100 (nothing actively building to measure against)
-        local builderEfficiency = effCount > 0
-            and ((effSum / effCount) * 100)
-            or  (totalBP > 0 and 100 or 0)
+        -- Builder efficiency: rolling average over the last ~10 seconds of sampled values.
+        -- Smooths out spikes caused by build-speed ramp-up on certain unit types and avoids
+        -- misleading single-frame readings at the moment the send fires.
+        local builderEfficiency = GetRollingEfficiencyAverage()
 
         if SendData then
             SendData({
