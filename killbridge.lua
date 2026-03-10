@@ -185,6 +185,33 @@ local function SendAllyTeamColors()
     SendData({ event = "AllyColorsUpdate", colors = colors })
 end
 
+-- ── Seed builderUnits from currently alive units (mid-game init) ─────────────
+-- When the widget is toggled on mid-game, UnitFinished callbacks have already
+-- fired for every unit that was constructed before we loaded, so builderUnits
+-- would otherwise stay empty until the next unit finishes.  This function does
+-- a one-time scan of all alive units belonging to our team and registers any
+-- builders it finds, giving the rolling-average sampler correct data immediately.
+local function SeedBuilderUnits()
+    local myTeamID  = Spring.GetMyTeamID()
+    local unitList  = Spring.GetTeamUnits(myTeamID)
+    local seeded    = 0
+
+    if not unitList then return end
+
+    for _, uid in ipairs(unitList) do
+        local defID = Spring.GetUnitDefID(uid)
+        if defID then
+            local ud = UnitDefs[defID]
+            if ud and ud.isBuilder then
+                builderUnits[uid] = { bp = ud.buildSpeed or 0, defID = defID }
+                seeded = seeded + 1
+            end
+        end
+    end
+
+    Spring.Echo("KillBridge: Seeded " .. seeded .. " builder unit(s) from mid-game init.")
+end
+
 -- ── Compute the instantaneous builder-efficiency sample ───────────────────────
 -- Returns a value in [0, 100]:
 --   100 = every active builder drawing metal at full theoretical rate
@@ -278,6 +305,7 @@ function widget:Initialize()
     Connect()
     if Spring.GetGameFrame() > 0 then
         -- widget started late or toggled on mid-game
+        SeedBuilderUnits()   -- populate builderUnits so efficiency sampling is correct immediately
         SendData({event="WidgetInitializedMidGame"})
         SendAllyTeamColors()
     else
