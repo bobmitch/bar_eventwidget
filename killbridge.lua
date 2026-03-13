@@ -685,6 +685,9 @@ function widget:GameFrame(frame)
             frame = frame,
             teams = allTeamStats
         })
+
+        -- send colors as well, negligible size, ensures web app up to date even if page refreshed
+        SendAllyTeamColors() 
     end
 end
 
