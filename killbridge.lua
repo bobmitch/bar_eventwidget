@@ -35,6 +35,11 @@ local efficiencySamples          = {}  -- circular buffer of raw [0–100] value
 local efficiencySampleCount      = 0   -- number of valid entries currently in buffer
 local efficiencySampleIndex      = 0   -- next write position (0-based mod WINDOW_SAMPLES)
 
+-- ── PlayerChanged: track previous spectator state per playerID ─────────────────
+-- We only care about the active→spectator transition, so we snapshot
+-- each known player's spectator status and compare on every callin.
+local playerWasSpectator = {}  -- playerID → bool
+
 function widget:GetInfo()
     return {
         name    = "KillBridgeTCP",
@@ -212,6 +217,18 @@ local function SeedBuilderUnits()
     Spring.Echo("KillBridge: Seeded " .. seeded .. " builder unit(s) from mid-game init.")
 end
 
+-- ── Seed playerWasSpectator from all currently known players ──────────────────
+-- Called at Initialize so PlayerChanged has a valid baseline and won't
+-- fire false positives for players who were already spectating at load.
+local function SeedPlayerSpectatorState()
+    local playerList = Spring.GetPlayerList()
+    if not playerList then return end
+    for _, pid in ipairs(playerList) do
+        local _, _, isSpec = Spring.GetPlayerInfo(pid)
+        playerWasSpectator[pid] = isSpec
+    end
+end
+
 -- ── Compute the instantaneous builder-efficiency sample ───────────────────────
 -- Returns a value in [0, 100]:
 --   100 = every active builder drawing metal at full theoretical rate
@@ -303,6 +320,8 @@ end
 function widget:Initialize()
     -- Attempt initial connection
     Connect()
+    -- Snapshot every player's spectator state so PlayerChanged has a baseline
+    SeedPlayerSpectatorState()
     if Spring.GetGameFrame() > 0 then
         -- widget started late or toggled on mid-game
         SeedBuilderUnits()   -- populate builderUnits so efficiency sampling is correct immediately
@@ -362,6 +381,43 @@ function widget:GameOver(winningAllyTeams)
         winningTeams = winningAllyTeams,
         history = history
     })
+end
+
+-- ── PlayerChanged ─────────────────────────────────────────────────────────────
+-- Fires whenever a player's info changes (e.g. they become a spectator).
+-- Only sends an event when an active player transitions TO spectator,
+-- and includes whether they were friendly or enemy from our perspective.
+function widget:PlayerChanged(playerID)
+    local name, _, isSpec, teamID = Spring.GetPlayerInfo(playerID)
+    if not name then return end
+
+    local wasSpec = playerWasSpectator[playerID]
+
+    -- Only act on the active → spectator transition
+    if isSpec and not wasSpec then
+        local myAllyTeamID     = Spring.GetMyAllyTeamID()
+        local playerAllyTeamID = teamID and Spring.GetTeamAllyTeamID(teamID)
+
+        local relation
+        if playerAllyTeamID ~= nil and playerAllyTeamID == myAllyTeamID then
+            relation = "friendly"
+        else
+            relation = "enemy"
+        end
+
+        SendData({
+            event             = "PlayerBecameSpectator",
+            changedPlayerID   = playerID,
+            changedPlayerName = name,
+            relation          = relation,  -- "friendly" or "enemy"
+            teamID            = teamID     -- the team they left (may be nil if already teamless)
+        })
+
+        Spring.Echo("KillBridge: " .. name .. " (" .. relation .. ") became a spectator.")
+    end
+
+    -- Always update the snapshot so future transitions are detected correctly
+    playerWasSpectator[playerID] = isSpec
 end
 
 function widget:UnitEnteredLos(unitID, allyTeam)
@@ -537,7 +593,7 @@ function widget:UnitDestroyed(unitID, unitDefID, unitTeam, attackerID, attackerD
         
         unitID             = unitID,
         unitDefID          = unitDefID,
-        unitXP            = Spring.GetUnitExperience(unitID) or 0,
+        unitXP             = Spring.GetUnitExperience(unitID) or 0,
         
         unitTeam           = unitTeam,
         victimPlayer       = victimPlayerName,
