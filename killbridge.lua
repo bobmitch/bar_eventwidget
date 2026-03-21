@@ -463,22 +463,6 @@ function widget:Shutdown()
 end
 
 
--- pre-relation change version
---[[ function widget:UnitFinished(unitID, unitDefID, unitTeam)
-    if unitTeam == Spring.GetMyTeamID() then
-        local ud = UnitDefs[unitDefID]
-        SendData({
-            event         = "UnitFinished",
-            unitName      = ud.name,
-            unitID        = unitID,
-            unitDefID     = unitDefID,
-            unitTeam      = unitTeam,
-            unitCategory  = ud.modCategories, -- json.lua handles this table automatically
-            unitMetalCost = ud.metalCost
-        })
-    end
-end ]]
-
 function widget:UnitFinished(unitID, unitDefID, unitTeam)
     local myTeamID = Spring.GetMyTeamID()
     local myAllyTeamID = Spring.GetMyAllyTeamID()
@@ -608,6 +592,120 @@ function widget:UnitDestroyed(unitID, unitDefID, unitTeam, attackerID, attackerD
 
         attackerCumulativeDamage = attackerTotalDamage
     })
+end
+
+-- ── UnitTaken ─────────────────────────────────────────────────────────────────
+-- Fired when a unit is transferred AWAY from oldTeam (before UnitGiven).
+-- At this point the unit is still assigned to oldTeam internally.
+-- We only send an event if our team is the giver (oldTeam) or receiver (newTeam),
+-- since those are the only cases relevant to the JS tracker.
+function widget:UnitTaken(unitID, unitDefID, oldTeam, newTeam)
+    local myTeamID     = Spring.GetMyTeamID()
+    local myAllyTeamID = Spring.GetMyAllyTeamID()
+
+    -- Only care if we are involved in the transfer
+    if oldTeam ~= myTeamID and newTeam ~= myTeamID then return end
+
+    local ud = unitDefID and UnitDefs[unitDefID]
+    if not ud then return end
+
+    -- Determine relation from our perspective
+    -- oldTeam still "owns" the unit at this point per the engine docs
+    local relation
+    if oldTeam == myTeamID then
+        relation = "self"   -- we are giving the unit away
+    else
+        local newAllyTeamID = Spring.GetTeamAllyTeamID(newTeam)
+        if newAllyTeamID == myAllyTeamID then
+            relation = "ally"
+        else
+            relation = "enemy"
+        end
+    end
+
+    local tier = ud.customParams and ud.customParams.techlevel or "1"
+
+    -- Update builder tracking: if we are losing a builder, remove it
+    if oldTeam == myTeamID and ud.isBuilder then
+        builderUnits[unitID] = nil
+    end
+
+    SendData({
+        event          = "UnitTaken",
+        unitID         = unitID,
+        unitDefID      = unitDefID or -1,
+        unitName       = ud.name,
+        unitTier       = tier,
+        unitMetalCost  = ud.metalCost or 0,
+        unitBuildSpeed = ud.buildSpeed or 0,
+        oldTeam        = oldTeam,
+        newTeam        = newTeam,
+        oldTeamPlayer  = GetPlayerNameFromTeam(oldTeam),
+        newTeamPlayer  = GetPlayerNameFromTeam(newTeam),
+        relation       = relation,   -- perspective: "self" = we gave it, "ally"/"enemy" = we received from/to them
+        myAllyTeamID   = myAllyTeamID,
+        oldAllyTeamID  = Spring.GetTeamAllyTeamID(oldTeam),
+        newAllyTeamID  = Spring.GetTeamAllyTeamID(newTeam)
+    })
+
+    Spring.Echo("KillBridge: UnitTaken — " .. ud.name .. " from team " .. oldTeam .. " to team " .. newTeam)
+end
+
+-- ── UnitGiven ─────────────────────────────────────────────────────────────────
+-- Fired when a unit is transferred TO newTeam (after UnitTaken).
+-- At this point the unit IS assigned to newTeam.
+-- We only send an event if our team is the receiver (newTeam) or giver (oldTeam),
+-- since those are the only cases relevant to the JS tracker.
+function widget:UnitGiven(unitID, unitDefID, newTeam, oldTeam)
+    local myTeamID     = Spring.GetMyTeamID()
+    local myAllyTeamID = Spring.GetMyAllyTeamID()
+
+    -- Only care if we are involved in the transfer
+    if oldTeam ~= myTeamID and newTeam ~= myTeamID then return end
+
+    local ud = unitDefID and UnitDefs[unitDefID]
+    if not ud then return end
+
+    -- Determine relation from our perspective
+    -- newTeam now owns the unit at this point per the engine docs
+    local relation
+    if newTeam == myTeamID then
+        relation = "self"   -- we received the unit
+    else
+        local oldAllyTeamID = Spring.GetTeamAllyTeamID(oldTeam)
+        if oldAllyTeamID == myAllyTeamID then
+            relation = "ally"
+        else
+            relation = "enemy"
+        end
+    end
+
+    local tier = ud.customParams and ud.customParams.techlevel or "1"
+
+    -- Update builder tracking: if we received a builder, start tracking it
+    if newTeam == myTeamID and ud.isBuilder then
+        builderUnits[unitID] = { bp = ud.buildSpeed or 0, defID = unitDefID }
+    end
+
+    SendData({
+        event          = "UnitGiven",
+        unitID         = unitID,
+        unitDefID      = unitDefID or -1,
+        unitName       = ud.name,
+        unitTier       = tier,
+        unitMetalCost  = ud.metalCost or 0,
+        unitBuildSpeed = ud.buildSpeed or 0,
+        oldTeam        = oldTeam,
+        newTeam        = newTeam,
+        oldTeamPlayer  = GetPlayerNameFromTeam(oldTeam),
+        newTeamPlayer  = GetPlayerNameFromTeam(newTeam),
+        relation       = relation,   -- perspective: "self" = we received it, "ally"/"enemy" = from/to them
+        myAllyTeamID   = myAllyTeamID,
+        oldAllyTeamID  = Spring.GetTeamAllyTeamID(oldTeam),
+        newAllyTeamID  = Spring.GetTeamAllyTeamID(newTeam)
+    })
+
+    Spring.Echo("KillBridge: UnitGiven — " .. ud.name .. " to team " .. newTeam .. " from team " .. oldTeam)
 end
 
 
